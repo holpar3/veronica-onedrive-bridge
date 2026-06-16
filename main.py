@@ -26,6 +26,7 @@ import threading
 import msal
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ---- Config (all from env; CLIENT_ID is a public identifier, not a secret) ----
@@ -87,6 +88,7 @@ app = FastAPI(
     version="1.0.0",
     description="Read and write the vault stored in OneDrive.",
 )
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ---------------- auth + health (hidden from the tool schema) ----------------
 
