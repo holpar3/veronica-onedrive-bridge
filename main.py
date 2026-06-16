@@ -160,7 +160,7 @@ def list_files(path: str = "", _=Depends(require_key)):
 )
 def read_file(path: str, _=Depends(require_key)):
     token = _token_or_401()
-    url = f"{GRAPH}/me/drive/root:/{path.strip('/')}:/content"
+    url = f"{GRAPH}/me/drive/root:/{quote(path.strip('/'), safe='/')}:/content"
     r = requests.get(url, headers=_auth_header(token))
     r.raise_for_status()
     try:
@@ -181,7 +181,7 @@ class WriteBody(BaseModel):
 )
 def write_file(body: WriteBody, _=Depends(require_key)):
     token = _token_or_401()
-    url = f"{GRAPH}/me/drive/root:/{body.path.strip('/')}:/content"
+    url = f"{GRAPH}/me/drive/root:/{quote(body.path.strip('/'), safe='/')}:/content"
     headers = _auth_header(token)
     headers["Content-Type"] = "text/plain"
     r = requests.put(url, headers=headers, data=body.content.encode("utf-8"))
