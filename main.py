@@ -22,6 +22,7 @@ Design notes (so future-me doesn't re-derive them):
 
 import os
 import threading
+from urllib.parse import quote
 
 import msal
 import requests
@@ -138,7 +139,7 @@ def auth_status(_=Depends(require_key)):
 )
 def list_files(path: str = "", _=Depends(require_key)):
     token = _token_or_401()
-    clean = path.strip("/")
+    clean = quote(path.strip("/"), safe="/")
     if clean:
         url = f"{GRAPH}/me/drive/root:/{clean}:/children"
     else:
