@@ -1,8 +1,14 @@
 """
-Veronica Home -- OneDrive Bridge
+Veronica Home -- OneDrive Bridge  (+ MCP doorway for Mistral Work)
 =================================
 A thin OpenAPI tool server that lets the self-hosted home (Open WebUI / Gemma)
 read and write the OneDrive vault through Microsoft Graph.
+
+This version also exposes the SAME four tools to Mistral Work as an MCP
+connector over Streamable HTTP at /mcp. The MCP tools just call the existing
+bridge functions below, so there's one source of truth for the Graph logic.
+/mcp is locked behind the SAME BRIDGE_API_KEY you already use -- no new secret:
+when you add the connector in Work, paste BRIDGE_API_KEY as the bearer token.
 
 Design notes (so future-me doesn't re-derive them):
   * Auth = device-code flow (PUBLIC client) against the `consumers` authority.
@@ -20,6 +26,7 @@ Design notes (so future-me doesn't re-derive them):
     bearer key (BRIDGE_API_KEY). Open WebUI sends it as the tool-server Bearer.
 """
 
+import json
 import os
 import threading
 from urllib.parse import quote
@@ -28,7 +35,10 @@ import msal
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp import FastMCP
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 # ---- Config (all from env; CLIENT_ID is a public identifier, not a secret) ----
 CLIENT_ID = os.environ["GRAPH_CLIENT_ID"]
@@ -84,12 +94,83 @@ def _token_or_401():
     return token
 
 
+# ============================================================================
+# MCP doorway (NEW) -- exposes the four tools to Mistral Work at /mcp.
+# Each tool calls the existing bridge function (defined further below) and
+# returns JSON. Names are resolved at call time, so definition order is fine.
+# ============================================================================
+
+mcp = FastMCP("Veronica Vault")
+
+
+@mcp.tool(name="list_files")
+def _mcp_list_files(path: str = "") -> str:
+    """List files and folders in the vault. Leave path empty for the vault root."""
+    try:
+        return json.dumps(list_files(path=path))
+    except Exception as e:
+        return f"[error] {e}"
+
+
+@mcp.tool(name="read_file")
+def _mcp_read_file(path: str) -> str:
+    """Read a text file from the vault, e.g. 'Veronica/Read Me First.md'."""
+    try:
+        return json.dumps(read_file(path=path))
+    except Exception as e:
+        return f"[error] {e}"
+
+
+@mcp.tool(name="search_files")
+def _mcp_search_files(query: str) -> str:
+    """Search the vault by keyword and return matching file paths."""
+    try:
+        return json.dumps(search_files(query=query))
+    except Exception as e:
+        return f"[error] {e}"
+
+
+@mcp.tool(name="write_file")
+def _mcp_write_file(path: str, content: str) -> str:
+    """Write or overwrite a text file in the vault.
+
+    Use ONLY to create or append your own journal entries
+    (e.g. 'Veronica/Journal/2026-06-18.md'). Never overwrite an existing
+    vault file: read it first, then write the combined text back.
+    """
+    try:
+        return json.dumps(write_file(WriteBody(path=path, content=content)))
+    except Exception as e:
+        return f"[error] {e}"
+
+
+mcp_app = mcp.http_app(path="/", transport="streamable-http")
+
+
+class MCPBearer(BaseHTTPMiddleware):
+    """Gate ONLY the /mcp routes with the bridge's bearer key (reused for Work)."""
+
+    async def dispatch(self, request, call_next):
+        if request.url.path.startswith("/mcp"):
+            if request.headers.get("authorization", "") != f"Bearer {BRIDGE_API_KEY}":
+                return JSONResponse(
+                    {"detail": "Unauthorized"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        return await call_next(request)
+
+
+# ---- FastAPI app (now sharing the MCP lifespan so /mcp's session manager runs) ----
 app = FastAPI(
     title="Veronica Home OneDrive Bridge",
     version="1.0.0",
     description="Read and write the vault stored in OneDrive.",
+    lifespan=mcp_app.lifespan,
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(MCPBearer)
+app.mount("/mcp", mcp_app)
 
 # ---------------- auth + health (hidden from the tool schema) ----------------
 
